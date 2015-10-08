@@ -96,7 +96,7 @@ def find_files_thread(walk_queue, file_queue, verbosity):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Simple script to walk a path and fix files on an EC CephFS pool hit by bug 12551')
-    parser.add_argument("--verbose", "-v", action='count')
+    parser.add_argument("--verbose", "-v", action='count', default=0)
     parser.add_argument("--fix-threads", "-f", type=int, default=8, help="Threads to fix the files with")
     parser.add_argument("--check-threads", "-c", type=int, default=8, help="Threads to check the files with")
     parser.add_argument("--walk-threads", "-w", type=int, default=8, help="Threads to walk the tree with")
@@ -115,10 +115,10 @@ if __name__ == "__main__":
         walk_queue.put(p)
 
     while True:
+        # avoid busy wait on the main thread
+        time.sleep(1)
         if walk_queue.empty() and file_queue.empty() and fix_queue.empty():
             fix_pool.terminate()
             check_pool.terminate()
             find_pool.terminate()
             break
-        # avoid busy wait on the main thread
-        time.sleep(1)
