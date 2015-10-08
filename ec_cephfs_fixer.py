@@ -114,7 +114,7 @@ if __name__ == "__main__":
         # avoid busy wait on the main thread
         time.sleep(1)
         if walk_queue.empty() and file_queue.empty() and fix_queue.empty():
-            fix_pool.terminate()
-            check_pool.terminate()
-            find_pool.terminate()
+            fix_pool.close()
+            check_pool.close()
+            find_pool.close()
             break
