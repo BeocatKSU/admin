@@ -100,12 +100,8 @@ if __name__ == "__main__":
     parser.add_argument("--fix-threads", "-f", type=int, default=8, help="Threads to fix the files with")
     parser.add_argument("--check-threads", "-c", type=int, default=8, help="Threads to check the files with")
     parser.add_argument("--walk-threads", "-w", type=int, default=8, help="Threads to walk the tree with")
-    parser.add_argument("path", nargs="*", help="Paths to walk, check and fix")
+    parser.add_argument("path", nargs="+", help="Paths to walk, check and fix")
     args = parser.parse_args()
-
-    if len(args.path) < 1:
-        parser.print_help()
-        sys.exit(1)
 
     fix_pool = multiprocessing.Pool(args.fix_threads, fix_file_thread, (fix_queue, args.verbose))
     check_pool = multiprocessing.Pool(args.check_threads, check_file_thread, (file_queue, fix_queue, args.verbose))
