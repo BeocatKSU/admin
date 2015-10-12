@@ -42,13 +42,21 @@ def fix_file(filename, verbosity):
     byte larger, then the correct number of bytes, and resets the
     mtime."""
     if verbosity > 0:
-        print("Would fix {}".format(filename))
+        print("Fixing {}".format(filename))
     stat = os.stat(filename)
-    with open(filename, 'wb+') as f:
-        f.truncate(stat.st_size + 1)
-    with open(filename, 'wb+') as f:
-        f.truncate(stat.st_size)
+    fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
+    os.ftruncate(fd, stat.st_size + 1)
+    os.close(fd)
+    fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
+    os.ftruncate(fd, stat.st_size)
+    os.close(fd)
     os.utime(filename, (stat.st_atime, stat.st_mtime))
+    # OLD METHOD
+    # with open(filename, 'wb') as f:
+    #     f.truncate(stat.st_size + 1)
+    # with open(filename, 'wb') as f:
+    #     f.truncate(stat.st_size)
+    # os.utime(filename, (stat.st_atime, stat.st_mtime))
 
 
 def check_file(filename, fix_queue, verbosity):
@@ -96,16 +104,18 @@ def find_files_thread(walk_queue, file_queue, verbosity):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Simple script to walk a path and fix files on an EC CephFS pool hit by bug 12551')
-    parser.add_argument("--verbose", "-v", action='count', default=0)
+    parser.add_argument("--verbose", "-v", action='count', default=1)
+    parser.add_argument("--quiet", "-q", action='count', default=0)
     parser.add_argument("--fix-threads", "-f", type=int, default=8, help="Threads to fix the files with")
     parser.add_argument("--check-threads", "-c", type=int, default=8, help="Threads to check the files with")
     parser.add_argument("--walk-threads", "-w", type=int, default=8, help="Threads to walk the tree with")
     parser.add_argument("path", nargs="+", help="Paths to walk, check and fix")
     args = parser.parse_args()
 
-    fix_pool = multiprocessing.Pool(args.fix_threads, fix_file_thread, (fix_queue, args.verbose))
-    check_pool = multiprocessing.Pool(args.check_threads, check_file_thread, (file_queue, fix_queue, args.verbose))
-    find_pool = multiprocessing.Pool(args.walk_threads, find_files_thread, (walk_queue, file_queue, args.verbose))
+    verbosity = args.verbose - args.quiet
+    fix_pool = multiprocessing.Pool(args.fix_threads, fix_file_thread, (fix_queue, verbosity))
+    check_pool = multiprocessing.Pool(args.check_threads, check_file_thread, (file_queue, fix_queue, verbosity))
+    find_pool = multiprocessing.Pool(args.walk_threads, find_files_thread, (walk_queue, file_queue, verbosity))
 
     for p in args.path:
         walk_queue.put(p)
