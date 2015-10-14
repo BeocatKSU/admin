@@ -37,26 +37,21 @@ walk_queue = multiprocessing.Queue()
 file_queue = multiprocessing.Queue()
 fix_queue = multiprocessing.Queue()
 
-def fix_file(filename, verbosity):
+def fix_file(filename, verbosity, dry_run=True):
     """Takes a filename that needs to be fixed, truncates it to a
     byte larger, then the correct number of bytes, and resets the
     mtime."""
     if verbosity > 0:
         print("Fixing {}".format(filename))
-    stat = os.stat(filename)
-    fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
-    os.ftruncate(fd, stat.st_size + 1)
-    os.close(fd)
-    fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
-    os.ftruncate(fd, stat.st_size)
-    os.close(fd)
-    os.utime(filename, (stat.st_atime, stat.st_mtime))
-    # OLD METHOD
-    # with open(filename, 'wb') as f:
-    #     f.truncate(stat.st_size + 1)
-    # with open(filename, 'wb') as f:
-    #     f.truncate(stat.st_size)
-    # os.utime(filename, (stat.st_atime, stat.st_mtime))
+    if not dry_run:
+        stat = os.stat(filename)
+        fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
+        os.ftruncate(fd, stat.st_size + 1)
+        os.close(fd)
+        fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
+        os.ftruncate(fd, stat.st_size)
+        os.close(fd)
+        os.utime(filename, (stat.st_atime, stat.st_mtime))
 
 
 def check_file(filename, fix_queue, verbosity):
@@ -91,10 +86,10 @@ def check_file_thread(file_queue, fix_queue, verbosity):
     while True:
         check_file(file_queue.get(), fix_queue, verbosity)
 
-def fix_file_thread(fix_queue, verbosity):
+def fix_file_thread(fix_queue, verbosity, dry_run):
     """Forever, check the fix_queue"""
     while True:
-        fix_file(fix_queue.get(), verbosity)
+        fix_file(fix_queue.get(), verbosity, dry_run)
 
 def find_files_thread(walk_queue, file_queue, verbosity):
     """Forever, check the walk_queue"""
@@ -109,11 +104,12 @@ if __name__ == "__main__":
     parser.add_argument("--fix-threads", "-f", type=int, default=8, help="Threads to fix the files with")
     parser.add_argument("--check-threads", "-c", type=int, default=8, help="Threads to check the files with")
     parser.add_argument("--walk-threads", "-w", type=int, default=8, help="Threads to walk the tree with")
+    parser.add_argument("--dry-run", "-d", default=False, action='store_true', help="Doesn't actually fix the files")
     parser.add_argument("path", nargs="+", help="Paths to walk, check and fix")
     args = parser.parse_args()
 
     verbosity = args.verbose - args.quiet
-    fix_pool = multiprocessing.Pool(args.fix_threads, fix_file_thread, (fix_queue, verbosity))
+    fix_pool = multiprocessing.Pool(args.fix_threads, fix_file_thread, (fix_queue, verbosity, args.dry_run))
     check_pool = multiprocessing.Pool(args.check_threads, check_file_thread, (file_queue, fix_queue, verbosity))
     find_pool = multiprocessing.Pool(args.walk_threads, find_files_thread, (walk_queue, file_queue, verbosity))
 
