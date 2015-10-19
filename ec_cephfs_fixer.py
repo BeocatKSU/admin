@@ -47,9 +47,11 @@ def fix_file(filename, verbosity, dry_run=True):
         stat = os.stat(filename)
         fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
         os.ftruncate(fd, stat.st_size + 1)
+        os.fsync(fd)
         os.close(fd)
         fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
         os.ftruncate(fd, stat.st_size)
+        os.fsync(fd)
         os.close(fd)
         os.utime(filename, (stat.st_atime, stat.st_mtime))
 
