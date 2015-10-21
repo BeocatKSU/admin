@@ -78,6 +78,8 @@ def find_files(directory, walk_queue, file_queue, verbosity):
         print("Walking {}".format(directory))
     for item in os.listdir(directory):
         item = os.path.join(directory, item)
+        if os.path.islink(item):
+            continue  # if it is a link, the listdir with fail
         if os.path.isdir(item):
             walk_queue.put(item)
         elif os.path.isfile(item):
