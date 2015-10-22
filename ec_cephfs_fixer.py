@@ -43,7 +43,7 @@ def fix_file(filename, verbosity, dry_run=True):
     mtime."""
     if verbosity > 0:
         print("Fixing {}".format(filename))
-    if not dry_run:
+    if not dry_run and os.path.exists(filename):
         stat = os.stat(filename)
         fd = os.open(filename, os.O_WRONLY | os.O_NONBLOCK | os.O_CREAT)
         os.ftruncate(fd, stat.st_size + 1)
@@ -61,7 +61,7 @@ def check_file(filename, fix_queue, verbosity):
     assume the file needs fixing"""
     if verbosity > 2:
         print("Checking {}".format(filename))
-    if os.stat(filename).st_size > 0:
+    if os.path.exists(filename) and os.stat(filename).st_size > 0:
         with open(filename, 'rb') as f:
             b = f.read(128)
         for byte in b:
