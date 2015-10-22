@@ -76,14 +76,15 @@ def find_files(directory, walk_queue, file_queue, verbosity):
     on the walk_queue"""
     if verbosity > 1:
         print("Walking {}".format(directory))
-    for item in os.listdir(directory):
-        item = os.path.join(directory, item)
-        if os.path.islink(item):
-            continue  # if it is a link, the listdir with fail
-        if os.path.isdir(item):
-            walk_queue.put(item)
-        elif os.path.isfile(item):
-            file_queue.put(item)
+    if os.path.exists(directory):
+        for item in os.listdir(directory):
+            item = os.path.join(directory, item)
+            if os.path.islink(item):
+                continue  # if it is a link, the listdir with fail
+            if os.path.isdir(item):
+                walk_queue.put(item)
+            elif os.path.isfile(item):
+                file_queue.put(item)
 
 def check_file_thread(file_queue, fix_queue, verbosity):
     """Forever, check the file_queue"""
