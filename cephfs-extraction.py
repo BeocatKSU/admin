@@ -8,6 +8,7 @@ import argparse
 
 default_conf = '/etc/ceph/ceph.conf'
 metadata_pool = 'metadata'
+debug = False
 
 
 class CephConnMan:
@@ -139,6 +140,8 @@ def extract_directory(inode):
     if is_dir(inode, entry):
       if not is_unextractable(entry_inode):
         # recurse into directory
+        if debug:
+          print "Entering directory: {}".format(entry[:-5])
         with DirMan(entry[:-5]):
           extract_directory(entry_inode)
       else:
@@ -156,6 +159,8 @@ def extract_file(inode, iname, pool_id, size):
   fname = iname[:-5]
   chunks = size / seg_size
   left_size = size
+  if debug:
+    print "Extracting file {}, size {}, inode {}".format(fname, size, inode)
   for segment in range(0, chunks + 1):
     if left_size > seg_size:
       osize = seg_size
@@ -173,11 +178,18 @@ def get_obj(oname, pool_id, size, cname):
   with CephConnMan(default_conf) as cluster:
     pool_name = cluster.pool_reverse_lookup(pool_id)
     with IoctxConnMan(cluster, pool_name) as ioctx:
-      osize = ioctx.stat(oname)[0]
-      contents = ioctx.read(oname, length=osize)  # read the length of the object.
+      try:
+        osize = ioctx.stat(oname)[0]
+      except rados.ObjectNotFound:
+        print "{}: Object {} not found, setting object size to 0".format(cname, oname)
+        osize = 0
+      if osize != 0:
+        contents = ioctx.read(oname, length=osize)  # read the length of the object.
+      else:
+        contents = bytes()
       if len(contents) < size:
         contents += ('\0' * (size - len(contents)))  # object could be sparse, compensate
-      with open(cname, 'w+') as f:
+      with open(cname, 'ab') as f:
         f.write(contents)
 
 
@@ -186,12 +198,14 @@ if __name__ == '__main__':
   parser.add_argument('--metadata-pool', '-p', help="Metadata pool name", default='metadata')
   parser.add_argument('--conf', '-c', help="Path to ceph.conf", default='/etc/ceph/ceph.conf')
   parser.add_argument('--ls', action='store_true', help="List a directory")
+  parser.add_argument('--debug', '-d', action='store_true', help="Print debug messages")
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--path', help="the path to extract", default=None)
   group.add_argument('--inode', '-i', help="inode to extract", default=None)
   namespace = parser.parse_args()
   default_conf = namespace.conf
   metadata_pool = namespace.metadata_pool
+  debug = namespace.debug
   inode = None
   if namespace.path is not None:
     inode = get_inode_from_path(namespace.path)
