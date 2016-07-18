@@ -4,11 +4,13 @@ import sys
 import struct
 import os
 import argparse
+import re
 
 
 default_conf = '/etc/ceph/ceph.conf'
 metadata_pool = 'metadata'
 debug = False
+regex = re.compile(".*")
 
 
 class CephConnMan:
@@ -140,9 +142,9 @@ def extract_directory(inode):
     if is_dir(inode, entry):
       if not is_unextractable(entry_inode):
         # recurse into directory
-        if debug:
-          print "Entering directory: {}".format(entry[:-5])
         with DirMan(entry[:-5]):
+          if debug:
+            print "Entering directory: {}".format(os.getcwd())
           extract_directory(entry_inode)
       else:
         print "Unable to extract {} as {} (timeout)".format(entry_inode, entry[:-5])
@@ -159,8 +161,14 @@ def extract_file(inode, iname, pool_id, size):
   fname = iname[:-5]
   chunks = size / seg_size
   left_size = size
+  if regex.match(fname) is None:
+    if debug:
+      print "Refusing to extract {}/{}, because it doesn't match {}".format(os.getcwd(), fname, regex.pattern)
+    return
   if debug:
-    print "Extracting file {}, size {}, inode {}".format(fname, size, inode)
+    print "Extracting file {}/{}, size {}, inode {}".format(os.getcwd(), fname, size, inode)
+  with open(fname, 'w') as f:
+    f.truncate()
   for segment in range(0, chunks + 1):
     if left_size > seg_size:
       osize = seg_size
@@ -202,10 +210,13 @@ if __name__ == '__main__':
   group = parser.add_mutually_exclusive_group()
   group.add_argument('--path', help="the path to extract", default=None)
   group.add_argument('--inode', '-i', help="inode to extract", default=None)
+  parser.add_argument('--regex', '-r', help="Regex to match against filenames for extraction")
   namespace = parser.parse_args()
   default_conf = namespace.conf
   metadata_pool = namespace.metadata_pool
   debug = namespace.debug
+  if namespace.regex is not None:
+    regex = re.compile(namespace.regex)
   inode = None
   if namespace.path is not None:
     inode = get_inode_from_path(namespace.path)
