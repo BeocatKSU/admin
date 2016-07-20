@@ -5,6 +5,7 @@ import struct
 import os
 import argparse
 import re
+import tarfile
 
 
 default_conf = '/etc/ceph/ceph.conf'
@@ -134,7 +135,7 @@ def get_inode_from_path(path):
   return inode
 
 
-def extract_directory(inode):
+def extract_directory(inode, tar=None, tarcwd=None):
   """Extracts files from an directory inode"""
   entries = list_dir(inode)
   for entry in entries:
@@ -145,17 +146,23 @@ def extract_directory(inode):
         with DirMan(entry[:-5]):
           if debug:
             print "Entering directory: {}".format(os.getcwd())
-          extract_directory(entry_inode)
+          if tar is not None:
+            new_tarcwd = os.path.join(tarcwd, entry[:-5])
+          else:
+            new_tarcwd = tarcwd
+          extract_directory(entry_inode, tar, new_tarcwd)
+        if tar is not None:
+          os.rmdir(entry[:-5])
       else:
         print "Unable to extract {} as {} (timeout)".format(entry_inode, entry[:-5])
     else:
       entry_pool_id = get_pool_id(inode, entry)
       entry_size = get_file_size(inode, entry)
       # extract the files now
-      extract_file(entry_inode, entry, entry_pool_id, entry_size)
+      extract_file(entry_inode, entry, entry_pool_id, entry_size, tar, tarcwd)
 
 
-def extract_file(inode, iname, pool_id, size):
+def extract_file(inode, iname, pool_id, size, tar=None, tarcwd=None):
   """extracts an object from the specified pool, sequentially until it is the right size"""
   seg_size = 4194304
   fname = iname[:-5]
@@ -179,6 +186,9 @@ def extract_file(inode, iname, pool_id, size):
     left_size -= osize
     if left_size < 0:
       break
+  if tar is not None:
+    tar.add(fname, arcname=os.path.join(tarcwd, fname))
+    os.remove(fname)
 
 
 def get_obj(oname, pool_id, size, cname):
@@ -211,6 +221,7 @@ if __name__ == '__main__':
   group.add_argument('--path', help="the path to extract", default=None)
   group.add_argument('--inode', '-i', help="inode to extract", default=None)
   parser.add_argument('--regex', '-r', help="Regex to match against filenames for extraction")
+  parser.add_argument('--file', '-f', help="The tar.gz file to extract all the files to")
   namespace = parser.parse_args()
   default_conf = namespace.conf
   metadata_pool = namespace.metadata_pool
@@ -228,4 +239,8 @@ if __name__ == '__main__':
     for line in list_dir(inode):
       print line[:-5]
   else:
-    extract_directory(inode)
+    if namespace.file is None:
+      extract_directory(inode)
+    else:
+      with tarfile.open(namespace.file, 'w:gz') as tar:
+        extract_directory(inode, tar, os.path.basename(namespace.file)[:-7])
