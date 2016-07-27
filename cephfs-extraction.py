@@ -11,7 +11,11 @@ import tarfile
 default_conf = '/etc/ceph/ceph.conf'
 metadata_pool = 'metadata'
 debug = False
-regex = re.compile(".*")
+regex = None
+a_size = None
+log_file = None
+is_max = False
+timeout = 1
 
 
 class CephConnMan:
@@ -108,8 +112,8 @@ def get_inode_from_omap_val(inode, name):
 def is_unextractable(inode):
   """Stats an object, with low timeouts to see if we can query it"""
   extra_conf = {
-      'rados_osd_op_timeout': '1',
-      'rados_mon_op_timeout': '1'
+      'rados_osd_op_timeout': str(timeout),
+      'rados_mon_op_timeout': str(timeout)
   }
   with CephConnMan(default_conf, extra_conf) as cluster:
     with IoctxConnMan(cluster, metadata_pool) as ioctx:
@@ -135,7 +139,7 @@ def get_inode_from_path(path):
   return inode
 
 
-def extract_directory(inode, tar=None, tarcwd=None):
+def extract_directory(inode, tar=None, tarcwd=None, log_fh=None):
   """Extracts files from an directory inode"""
   entries = list_dir(inode)
   for entry in entries:
@@ -146,52 +150,65 @@ def extract_directory(inode, tar=None, tarcwd=None):
         with DirMan(entry[:-5]):
           if debug:
             print "Entering directory: {}".format(os.getcwd())
-          if tar is not None:
-            new_tarcwd = os.path.join(tarcwd, entry[:-5])
-          else:
-            new_tarcwd = tarcwd
-          extract_directory(entry_inode, tar, new_tarcwd)
+          new_tarcwd = os.path.join(tarcwd, entry[:-5])
+          extract_directory(entry_inode, tar, new_tarcwd, log_fh)
         if tar is not None:
           os.rmdir(entry[:-5])
       else:
+        if log_fh is not None:
+          log_fh.write('"timeout","{}","{}"\n'.format(entry_inode, os.path.join(tarcwd, entry[:-5])))
         print "Unable to extract {} as {} (timeout)".format(entry_inode, entry[:-5])
     else:
       entry_pool_id = get_pool_id(inode, entry)
       entry_size = get_file_size(inode, entry)
       # extract the files now
-      extract_file(entry_inode, entry, entry_pool_id, entry_size, tar, tarcwd)
+      extract_file(entry_inode, entry, entry_pool_id, entry_size, tar, tarcwd, log_fh)
 
 
-def extract_file(inode, iname, pool_id, size, tar=None, tarcwd=None):
+def extract_file(inode, iname, pool_id, size, tar=None, tarcwd=None, log_fh=None):
   """extracts an object from the specified pool, sequentially until it is the right size"""
   seg_size = 4194304
   fname = iname[:-5]
   chunks = size / seg_size
   left_size = size
-  if regex.match(fname) is None:
+  if regex is not None and regex.match(fname) is None:
+    if log_fh is not None:
+      log_fh.write('"no-match","{}","{}","{}"\n'.format(inode, os.path.join(tarcwd, fname), size))
     if debug:
       print "Refusing to extract {}/{}, because it doesn't match {}".format(os.getcwd(), fname, regex.pattern)
     return
+  if size is not None:
+    if is_max and size > a_size:
+      if log_fh is not None:
+        log_fh.write('"too-large","{}","{}","{}"\n'.format(inode, os.path.join(tarcwd, fname), size))
+      if debug:
+        print "Refusing to extract {}, because it is larger than {} ({})".format(os.path.join(os.getcwd(), fname), a_size, size)
+      return
+    if not is_max and size <= a_size:
+      if log_fh is not None:
+        log_fh.write('"too-small","{}","{},"{}""\n'.format(inode, os.path.join(tarcwd, fname), size))
+      if debug:
+        print "Refusing to extract {}, because it is smaller than {} ({})".format(os.path.join(os.getcwd(), fname), a_size, size)
+      return
   if debug:
     print "Extracting file {}/{}, size {}, inode {}".format(os.getcwd(), fname, size, inode)
-  with open(fname, 'w') as f:
-    f.truncate()
-  for segment in range(0, chunks + 1):
-    if left_size > seg_size:
-      osize = seg_size
-    else:
-      osize = left_size
-    oname = "{}.{}".format(inode, "{0:#0{1}x}".format(segment, 10)[2:])
-    get_obj(oname, pool_id, osize, fname)
-    left_size -= osize
-    if left_size < 0:
-      break
+  with open(fname, 'wb') as fh:
+    for segment in range(0, chunks + 1):
+      if left_size > seg_size:
+        osize = seg_size
+      else:
+        osize = left_size
+      oname = "{}.{}".format(inode, "{0:#0{1}x}".format(segment, 10)[2:])
+      get_obj(oname, pool_id, osize, fh)
+      left_size -= osize
+      if left_size < 0:
+        break
   if tar is not None:
     tar.add(fname, arcname=os.path.join(tarcwd, fname))
     os.remove(fname)
 
 
-def get_obj(oname, pool_id, size, cname):
+def get_obj(oname, pool_id, size, fh):
   """Reads an object out of ceph, appends it to the file specified"""
   with CephConnMan(default_conf) as cluster:
     pool_name = cluster.pool_reverse_lookup(pool_id)
@@ -207,8 +224,26 @@ def get_obj(oname, pool_id, size, cname):
         contents = bytes()
       if len(contents) < size:
         contents += ('\0' * (size - len(contents)))  # object could be sparse, compensate
-      with open(cname, 'ab') as f:
-        f.write(contents)
+      fh.write(contents)
+
+
+def parse_size(ssize):
+  if ssize[0] == '+':
+    i_max = False
+  else:
+    i_max = True
+  ssize = ssize[1:]
+  if ssize[-1].upper() == 'T':
+    ssize = int(ssize[:-1]) * 1<<40
+  elif ssize[-1].upper() == 'G':
+    ssize = int(ssize[:-1]) * 1<<30
+  elif ssize[-1].upper() == 'M':
+    ssize = int(ssize[:-1]) * 1<<20
+  elif ssize[-1].upper() == 'K':
+    ssize = int(ssize[:-1]) * 1<<10
+  else:
+    ssize = int(ssize)
+  return (i_max, ssize)
 
 
 if __name__ == '__main__':
@@ -222,10 +257,18 @@ if __name__ == '__main__':
   group.add_argument('--inode', '-i', help="inode to extract", default=None)
   parser.add_argument('--regex', '-r', help="Regex to match against filenames for extraction")
   parser.add_argument('--file', '-f', help="The tar.gz file to extract all the files to")
+  parser.add_argument('--size', '-s', help="(+|-)size of files to extract")
+  parser.add_argument('--log-file', '-l', help="The file to log the extraction data to")
+  parser.add_argument('--timeout', '-t', help="Timeout to determine if the mds inode is unextractable", type=int, default=1)
   namespace = parser.parse_args()
   default_conf = namespace.conf
   metadata_pool = namespace.metadata_pool
   debug = namespace.debug
+  timeout = namespace.timeout
+  if namespace.size is not None:
+    if re.match('^[+-]\d+[TtGgMmKk]?$', namespace.size) is None:
+      parser.error("--size must be in the format (+|-)$num$suff")
+    is_max, a_size = parse_size(namespace.size)
   if namespace.regex is not None:
     regex = re.compile(namespace.regex)
   inode = None
@@ -236,11 +279,22 @@ if __name__ == '__main__':
   if inode is None:
     parser.error("We need either a path or an inode specified")
   if namespace.ls:
-    for line in list_dir(inode):
-      print line[:-5]
-  else:
-    if namespace.file is None:
-      extract_directory(inode)
+    if '<- bad' in inode:
+      print inode
     else:
-      with tarfile.open(namespace.file, 'w:gz') as tar:
-        extract_directory(inode, tar, os.path.basename(namespace.file)[:-7])
+      for line in list_dir(inode):
+        print line[:-5]
+  else:
+    if namespace.log_file is None:
+      if namespace.file is None:
+        extract_directory(inode, tarcwd=os.path.basename(os.getcwd()))
+      else:
+        with tarfile.open(namespace.file, 'w:gz') as tar:
+          extract_directory(inode, tar=tar, tarcwd=os.path.basename(namespace.file)[:-7])
+    else:
+      with open(namespace.log_file, 'a') as lfh:
+        if namespace.file is None:
+          extract_directory(inode, tarcwd=os.path.basename(os.getcwd()), log_fh=lfh)
+        else:
+          with tarfile.open(namespace.file, 'w:gz') as tar:
+            extract_directory(inode, tar=tar, tarcwd=os.path.basename(namespace.file)[:-7], log_fh=lfh)
